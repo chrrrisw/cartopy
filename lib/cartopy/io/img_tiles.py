@@ -46,9 +46,12 @@ class GoogleTiles(object):
     A "tile" in this class refers to the coordinates (x, y, z).
 
     """
+
+    DEFAULT_URL = ('https://mts0.google.com/vt/lyrs={style}'
+                   '@177000000&hl=en&src=api&x={x}&y={y}&z={z}&s=G')
+
     def __init__(self, desired_tile_form='RGB', style="street",
-                 url=('https://mts0.google.com/vt/lyrs={style}'
-                      '@177000000&hl=en&src=api&x={x}&y={y}&z={z}&s=G')):
+                 url=None):
         """
         Parameters
         ----------
@@ -63,24 +66,31 @@ class GoogleTiles(object):
             'World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}.jpg')
 
         """
+
+        self.url = url or self.DEFAULT_URL
+
         # Only streets are partly transparent tiles that can be overlayed over
         # the satellite map to create the known hybrid style from google.
-        styles = ["street", "satellite", "terrain", "only_streets"]
+        style_dict = {
+            "street": "m",
+            "satellite": "s",
+            "terrain": "t",
+            "only_streets": "h"}
         style = style.lower()
-        self.url = url
-        if style not in styles:
+        if style not in style_dict:
             msg = "Invalid style '%s'. Valid styles: %s" % \
-                (style, ", ".join(styles))
+                (style, ", ".join(style_dict))
             raise ValueError(msg)
-        self.style = style
 
         # The 'satellite' and 'terrain' styles require pillow with a jpeg
         # decoder.
-        if self.style in ["satellite", "terrain"] and \
+        if style in ["satellite", "terrain"] and \
                 not hasattr(Image.core, "jpeg_decoder") or \
                 not Image.core.jpeg_decoder:
             msg = "The '%s' style requires pillow with jpeg decoding support."
-            raise ValueError(msg % self.style)
+            raise ValueError(msg % style)
+
+        self.style = style_dict[style]
 
         self.imgs = []
         self.crs = ccrs.Mercator.GOOGLE
@@ -185,13 +195,9 @@ class GoogleTiles(object):
     _tileextent = tileextent
 
     def _image_url(self, tile):
-        style_dict = {
-            "street": "m",
-            "satellite": "s",
-            "terrain": "t",
-            "only_streets": "h"}
         url = self.url.format(
-            style=style_dict[self.style],
+            style=self.style,
+            tile=tile,
             x=tile[0], X=tile[0],
             y=tile[1], Y=tile[1],
             z=tile[2], Z=tile[2])
@@ -220,16 +226,17 @@ class MapQuestOSM(GoogleTiles):
     # http://devblog.mapquest.com/2016/06/15/
     # modernization-of-mapquest-results-in-changes-to-open-tile-access/
     # this now requires a sign up to a plan
+
+    DEFAULT_URL = 'http://otile1.mqcdn.com/tiles/1.0.0/osm/{z}/{x}/{y}.jpg'
+
     def _image_url(self, tile):
         x, y, z = tile
-        url = 'http://otile1.mqcdn.com/tiles/1.0.0/osm/%s/%s/%s.jpg' % (
-            z, x, y)
         mqdevurl = ('http://devblog.mapquest.com/2016/06/15/'
                     'modernization-of-mapquest-results-in-changes'
                     '-to-open-tile-access/')
         warnings.warn('{} will require a log in and and will likely'
                       ' fail. see {} for more details.'.format(url, mqdevurl))
-        return url
+        return self.url.format(x=x, y=y, z=z)
 
 
 class MapQuestOpenAerial(GoogleTiles):
@@ -237,19 +244,14 @@ class MapQuestOpenAerial(GoogleTiles):
     # The following attribution should be included in the resulting image:
     # "Portions Courtesy NASA/JPL-Caltech and U.S. Depart. of Agriculture,
     #  Farm Service Agency"
-    def _image_url(self, tile):
-        x, y, z = tile
-        url = 'http://oatile1.mqcdn.com/tiles/1.0.0/sat/%s/%s/%s.jpg' % (
-            z, x, y)
-        return url
+
+    DEFAULT_URL = 'http://oatile1.mqcdn.com/tiles/1.0.0/sat/{z}/{x}/{y}.jpg'
 
 
 class OSM(GoogleTiles):
     # http://developer.mapquest.com/web/products/open/map for terms of use
-    def _image_url(self, tile):
-        x, y, z = tile
-        url = 'https://a.tile.openstreetmap.org/%s/%s/%s.png' % (z, x, y)
-        return url
+
+    DEFAULT_URL = 'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'
 
 
 class StamenTerrain(GoogleTiles):
@@ -271,11 +273,8 @@ class StamenTerrain(GoogleTiles):
     https://github.com/migurski/DEM-Tools
 
     """
-    def _image_url(self, tile):
-        x, y, z = tile
-        url = 'http://tile.stamen.com/terrain-background/%s/%s/%s.png' % (
-            z, x, y)
-        return url
+
+    DEFAULT_URL = 'http://tile.stamen.com/terrain-background/{z}/{x}/{y}.png'
 
 
 class MapboxTiles(GoogleTiles):
@@ -285,6 +284,10 @@ class MapboxTiles(GoogleTiles):
     For terms of service, see https://www.mapbox.com/tos/.
 
     """
+
+    DEFAULT_URL = ('https://api.tiles.mapbox.com/v4/{mapid}/{z}/{x}/{y}.png?'
+                   'access_token={token}')
+
     def __init__(self, access_token, map_id):
         """
         Set up a new Mapbox tiles instance.
@@ -307,11 +310,9 @@ class MapboxTiles(GoogleTiles):
 
     def _image_url(self, tile):
         x, y, z = tile
-        url = ('https://api.tiles.mapbox.com/v4/{mapid}/{z}/{x}/{y}.png?'
-               'access_token={token}'.format(z=z, y=y, x=x,
-                                             mapid=self.map_id,
-                                             token=self.access_token))
-        return url
+        return self.url.format(x=x, y=y, z=z,
+                               mapid=self.map_id,
+                               token=self.access_token)
 
 
 class QuadtreeTiles(GoogleTiles):
@@ -323,11 +324,10 @@ class QuadtreeTiles(GoogleTiles):
     where the length of the quatree is the zoom level in Google Tile terms.
 
     """
-    def _image_url(self, tile):
-        url = ('http://ecn.dynamic.t1.tiles.virtualearth.net/comp/'
-               'CompositionHandler/{tile}?mkt=en-'
-               'gb&it=A,G,L&shading=hill&n=z'.format(tile=tile))
-        return url
+
+    DEFAULT_URL = ('http://ecn.dynamic.t1.tiles.virtualearth.net/comp/'
+                   'CompositionHandler/{tile}?mkt=en-'
+                   'gb&it=A,G,L&shading=hill&n=z')
 
     def tms_to_quadkey(self, tms, google=False):
         quadKey = ""
